@@ -271,3 +271,5 @@ Example:
 - `upload`: Uploads a file using bashupload.com.
 - `phpcmd`: Creates a simple PHP web shell.
 - `burl`: curl using burpsuite proxy.
+
+Credit : https://github.com/jazzpizazz/zsh-aliases.git 
