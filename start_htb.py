@@ -95,6 +95,7 @@ def ping_host(ip):
 
 def start_terminator_session(box_ip, box_name):
     command_list = [
+        ("rustscan-tcp", f"rustscan -a {box_ip} -- -sC -sV -o rustscan"),
         ("ports-tcp", f"nmap_default {box_ip} -p-"),
         ("ports-udp", f"nmap_udp {box_ip}"),
         ("vhost", f"sleep 2 && vhost {box_name}.htb"),
@@ -114,6 +115,8 @@ def start_terminator_session(box_ip, box_name):
             "--command", f"zsh -i -c '{cmd}; exec zsh'"
         ])
         time.sleep(1)
+        # Fullscreen the window using wmctrl
+        subprocess.run(["wmctrl", "-r", title, "-b", "add,maximized_vert,maximized_horz"])
 
 
 # === Main Execution ===
