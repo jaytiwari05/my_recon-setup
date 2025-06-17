@@ -93,19 +93,32 @@ def ping_host(ip):
             time.sleep(1)
 
 
-def start_terminator_session(box_ip, box_name):
-    command_list = [
-        ("rustscan-tcp", f"rustscan -a {box_ip} -- -sC -sV -o rustscan"),
-        ("ports-tcp", f"nmap_default {box_ip} -p-"),
-        ("ports-udp", f"nmap_udp {box_ip}"),
-        ("vhost", f"sleep 2 && vhost {box_name}.htb"),
-        ("fuzz1", f"fuzz_dir http://{box_name}.htb"),
-        ("fuzz2", f"feroxbuster -u http://{box_name}.htb"),
-        # ("ligolo-clean", "sudo ip link del ligolo"),
-        # ("ligolo-setup", "sudo ip tuntap add user $(whoami) mode tun ligolo && sudo ip link set ligolo up"),
-        ("ligolo-proxy", "ip link del ligolo 2>/dev/null; ip tuntap add dev ligolo mode tun user $(whoami); ip link set ligolo up && ligolo-proxy -selfcert"),
-        ("responder", "responder -I tun0"),
-    ]
+def start_terminator_session(box_ip, box_name, os_type):
+    if os_type == "w":
+        command_list = [
+            ("rustscan-tcp", f"rustscan -a {box_ip} -- -sC -sV -o rustscan"),
+            ("ports-tcp", f"nmap_default {box_ip} -p-"),
+            ("ports-udp", f"nmap_udp {box_ip}"),
+            ("vhost", f"sleep 2 && vhost {box_name}.htb"),
+            ("fuzz1", f"fuzz_dir http://{box_name}.htb"),
+            ("fuzz2", f"feroxbuster -u http://{box_name}.htb"),
+            ("smbclinet", "mkdir share; impacket-smbserver share ./share -smb2support"),
+            ("ligolo-proxy", "ip link del ligolo 2>/dev/null; ip tuntap add dev ligolo mode tun user $(whoami); ip link set ligolo up && ligolo-proxy -selfcert"),
+            ("responder", "responder -I tun0"),
+        ]
+    elif os_type == "l":
+        command_list = [
+            ("rustscan-tcp", f"rustscan -a {box_ip} -- -sC -sV -o rustscan"),
+            ("ports-tcp", f"nmap_default {box_ip} -p-"),
+            ("ports-udp", f"nmap_udp {box_ip}"),
+            ("vhost", f"sleep 1 && vhost {box_name}.htb"),
+            ("fuzz1", f"fuzz_dir http://{box_name}.htb"),
+            ("fuzz2", f"feroxbuster -u http://{box_name}.htb"),
+            ("go-dir", f"gobuster dir -w /opt/SecLists/Discovery/Web-Content/raft-small-words.txt -a 'pain' -o gobuster.txt -u http://{box_name}/"),
+        ]
+    else:
+        print("[-] Invalid OS type passed to Terminator session.")
+        sys.exit(1)
 
     for title, cmd in command_list:
         subprocess.Popen([
@@ -115,7 +128,6 @@ def start_terminator_session(box_ip, box_name):
             "--command", f"zsh -i -c '{cmd}; exec zsh'"
         ])
         time.sleep(1)
-        # Fullscreen the window using wmctrl
         subprocess.run(["wmctrl", "-r", title, "-b", "add,maximized_vert,maximized_horz"])
 
 
@@ -141,6 +153,12 @@ if __name__ == "__main__":
     box_ip = input("[?] Enter the IP: ")
     ping_host(box_ip)
     run_zsh_command(f"addhost {box_ip} {box_name}.htb")
+
+    os_type = input("[?] Target OS - Linux (l) or Windows (w): ").strip().lower()
+    if os_type not in ['l', 'w']:
+        print("[-] Invalid OS type. Please choose 'l' for Linux or 'w' for Windows.")
+        sys.exit(1)
+
     os.system(FULLSCREEN_I3_PANE)
 
-    start_terminator_session(box_ip, box_name)
+    start_terminator_session(box_ip, box_name, os_type)
