@@ -110,8 +110,8 @@ def start_terminator_split_layout(box_ip, box_name, os_type):
             ]),
             ("SERVICES", [
                 ("gobuster", f"gobuster dir -w /opt/SecLists/Discovery/Web-Content/raft-small-words.txt -a 'pain' -o gobuster.txt -u http://{box_name}/"),
-                ("placeholder", "echo 'Second pane - placeholder'"),
-                ("placeholder2", "echo 'Third pane - placeholder'")
+                ("placeholder", "updog -p 80'"),
+                ("placeholder2", f"sleep 1 ; dig axfr @{box_ip} {box_name}.htb'")
             ])
         ]
     else:
