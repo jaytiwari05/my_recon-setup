@@ -92,8 +92,8 @@ def start_terminator_split_layout(box_ip, box_name, os_type):
             ]),
             ("SERVICES", [
                 ("smbclient", "mkdir share; impacket-smbserver share ./share -smb2support"),
-                ("ligolo-proxy", "ip link del ligolo 2>/dev/null; ip tuntap add dev ligolo mode tun user $(whoami); ip link set ligolo up && ligolo-proxy -selfcert"),
-                ("responder", "responder -I tun0")
+                ("ligolo-proxy", "ip link del ligolo 2>/dev/null; ip tuntap add dev ligolo mode tun user $(whoami); ip link set ligolo up && ligolo-proxy -selfcert ;echo 'N'"),
+                ("smb_Guest", f"sleep 2; ntpdate {box_ip} && nxc smb {box_ip} -u 'a' -p '' --shares --users --pass-pol --rid-brute 10000 --log $(pwd)/smb.out; cat smb.out | grep TypeUser | cut -d '\' -f 2 | cut -d ' ' -f 1 > users.txt; cat users.txt")
             ])
         ]
     elif os_type == "l":
@@ -110,8 +110,8 @@ def start_terminator_split_layout(box_ip, box_name, os_type):
             ]),
             ("SERVICES", [
                 ("gobuster", f"gobuster dir -w /opt/SecLists/Discovery/Web-Content/raft-small-words.txt -a 'pain' -o gobuster.txt -u http://{box_name}/"),
-                ("placeholder", "updog -p 80'"),
-                ("placeholder2", f"sleep 1 ; dig axfr @{box_ip} {box_name}.htb'")
+                ("placeholder", "updog -p 80"),
+                ("placeholder2", f"sleep 1 ; dig axfr @{box_ip} {box_name}.htb")
             ])
         ]
     else:
