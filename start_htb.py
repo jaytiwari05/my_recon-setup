@@ -44,6 +44,10 @@ def ping_host(ip):
 def tmux(cmd_args):
     subprocess.run(['tmux'] + cmd_args, check=True)
 
+def run_zsh_command(command):
+    subprocess.run(['zsh', '-c', f'source ~/.zshrc && {command}'], check=True)
+
+
 def create_2x2_and_fill(session_name, window_name, commands):
     """Create 4 panes and send commands with Enter."""
     target = f"{session_name}:{window_name}"
@@ -95,7 +99,7 @@ def start_tmux_layout(box_name, box_ip, os_type):
         groups = [
             ("SCANNING", [
                 f"rustscan -a {box_ip} -- -sC -sV -o rustscan",
-                f"nmap_default {box_ip} -p-",
+                f"sleep 5 && nmap_default {box_ip} -p-",
                 f"nmap_udp {box_ip}",
                 f"dig {box_name}.htb"
             ]),
@@ -116,7 +120,7 @@ def start_tmux_layout(box_name, box_ip, os_type):
         groups = [
             ("SCANNING", [
                 f"rustscan -a {box_ip} -- -sC -sV -o rustscan",
-                f"sleep 2 && nmap_default {box_ip} -p-",
+                f"sleep 5 && nmap_default {box_ip} -p-",
                 f"nmap_udp {box_ip}",
                 f"dig {box_name}.htb"
             ])
@@ -144,10 +148,14 @@ if __name__ == "__main__":
 
     box_name = input("[?] Enter box name: ").strip()
     create_directory(box_name)
-    os.chdir(f"/htb/{box_name}/www")
+    os.chdir(f"/htb/{box_name}/www/")
+    run_zsh_command(f"gen_lin_rev {tun0_ip} 8443")
+    run_zsh_command(f"gen_php_rev {tun0_ip} 8443")
 
+    os.chdir(f"/htb/{box_name}/")
     box_ip = input("[?] Enter box IP: ").strip()
     ping_host(box_ip)
+    run_zsh_command(f"addhost {box_ip} {box_name}.htb")
 
     os_type = input("[?] Target OS - Linux (l) or Windows (w): ").strip().lower()
     start_tmux_layout(box_name, box_ip, os_type)
