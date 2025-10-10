@@ -1,48 +1,39 @@
+#!/usr/bin/env python3
 import os
 import subprocess
 import sys
 import time
 
-FULLSCREEN_I3_PANE = "i3-msg '[con_id=\"__focused__\"] fullscreen enable'"
-
+SPLIT_DELAY = 0.6
+COMMAND_DELAY = 1.0
+WINDOW_DELAY = 1.0
 
 def check_tun0_interface():
     try:
-        result = subprocess.run(['ip', 'addr', 'show', 'tun0'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if result.returncode != 0:
+        res = subprocess.run(['ip', 'addr', 'show', 'tun0'],
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res.returncode != 0:
             print("[-] tun0 not found or not connected")
             sys.exit(1)
-
-        for line in result.stdout.splitlines():
+        for line in res.stdout.splitlines():
             if "inet " in line:
                 return line.strip().split()[1].split('/')[0]
-
         print("[-] tun0 found but no IP address assigned")
         sys.exit(1)
-
     except Exception as e:
-        print(f"[-] Error checking tun0: {e}")
+        print("[-] Error checking tun0:", e)
         sys.exit(1)
-
 
 def create_directory(name):
     path = f"/htb/{name}"
-    try:
-        os.makedirs(f"{path}/www", exist_ok=True)
-        print(f"[+] Directory created: {path}/www")
-    except Exception as e:
-        print(f"[-] Failed to create directory: {e}")
-        sys.exit(1)
-
-
-def run_zsh_command(command):
-    subprocess.run(['zsh', '-c', f'source ~/.zshrc && {command}'], check=True)
-
+    os.makedirs(f"{path}/www", exist_ok=True)
+    print(f"[+] Directory created: {path}/www")
 
 def ping_host(ip):
     print("[i] Waiting for host to respond to ping...")
     for _ in range(15):
-        if subprocess.run(['ping', '-c', '1', '-W', '1', ip], stdout=subprocess.DEVNULL).returncode == 0:
+        if subprocess.run(['ping', '-c', '1', '-W', '1', ip],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
             print("[+] Host is alive!")
             return
         time.sleep(1)
@@ -50,79 +41,102 @@ def ping_host(ip):
     if choice == 'e':
         sys.exit(0)
 
+def tmux(cmd_args):
+    subprocess.run(['tmux'] + cmd_args, check=True)
 
-def generate_terminator_tab(tab_commands, tab_title):
-    first_title, first_cmd = tab_commands[0]
-    subprocess.Popen([
-        "terminator", "--new-tab",
-        "--title", tab_title,
-        "--command", f"zsh -i -c '{first_cmd}; exec zsh'"
-    ])
-    time.sleep(2)
+def create_2x2_and_fill(session_name, window_name, commands):
+    """Create 4 panes and send commands with Enter."""
+    target = f"{session_name}:{window_name}"
+    tmux(['new-window', '-d', '-t', session_name, '-n', window_name])
+    time.sleep(SPLIT_DELAY)
 
-    if len(tab_commands) >= 2:
-        _, second_cmd = tab_commands[1]
-        subprocess.run(["xdotool", "key", "Ctrl+Shift+O"])
-        time.sleep(0.5)
-        subprocess.run(["xdotool", "type", second_cmd])
-        subprocess.run(["xdotool", "key", "Return"])
+    # Split panes: top/bottom then left/right
+    panes = tmux_list_panes(target)
+    base_id = panes[0]['id']
+    tmux(['split-window', '-h', '-t', base_id])
+    time.sleep(SPLIT_DELAY)
+    panes = tmux_list_panes(target)
+    tmux(['split-window', '-v', '-t', panes[0]['id']])
+    time.sleep(SPLIT_DELAY)
+    tmux(['split-window', '-v', '-t', panes[1]['id']])
+    time.sleep(SPLIT_DELAY)
 
-    if len(tab_commands) >= 3:
-        _, third_cmd = tab_commands[2]
-        subprocess.run(["xdotool", "key", "Ctrl+Shift+E"])
-        time.sleep(0.5)
-        subprocess.run(["xdotool", "type", third_cmd])
-        subprocess.run(["xdotool", "key", "Return"])
+    panes = tmux_list_panes(target)
+    if len(panes) < 4:
+        print("[-] Could not create 4 panes")
+        sys.exit(1)
 
-    time.sleep(2)
+    # Send commands literally to each pane
+    for i, cmd in enumerate(commands[:4]):
+        pid = panes[i]['id']
+        # Send literally with quotes to prevent splitting
+        tmux(['send-keys', '-t', pid, cmd])
+        tmux(['send-keys', '-t', pid, 'C-m'])
+        time.sleep(COMMAND_DELAY)
 
+def tmux_list_panes(target):
+    out = subprocess.run(['tmux', 'list-panes', '-t', target, '-F', '#{pane_index} #{pane_id}'],
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+    panes = []
+    for line in out.stdout.splitlines():
+        idx, pid = line.split()
+        panes.append({'index': int(idx), 'id': pid})
+    return sorted(panes, key=lambda p: p['index'])
 
-def start_terminator_split_layout(box_ip, box_name, os_type):
+def start_tmux_layout(box_name, box_ip, os_type):
+    session_name = box_name
+    tmux(['new-session', '-d', '-s', session_name, '-n', 'init'])
+    tmux(['set-option', '-t', session_name, 'base-index', '1'])
+    tmux(['set-option', '-t', session_name, 'pane-base-index', '1'])
+    tmux(['set-option', '-t', session_name, 'prefix', 'C-a'])
+    tmux(['set-option', '-t', session_name, 'escape-time', '10'])
+
     if os_type == "w":
-        grouped_commands = [
+        groups = [
             ("SCANNING", [
-                ("rustscan-tcp", f"rustscan -a {box_ip} -- -sC -sV -o rustscan"),
-                ("ports-tcp", f"nmap_default {box_ip} -p-"),
-                ("ports-udp", f"nmap_udp {box_ip}")
+                f"rustscan -a {box_ip} -- -sC -sV -o rustscan",
+                f"nmap_default {box_ip} -p-",
+                f"nmap_udp {box_ip}",
+                f"dig {box_name}.htb"
             ]),
             ("FUZZING", [
-                ("vhost", f"sleep 2 && vhost {box_name}.htb"),
-                ("fuzz1", f"fuzz_dir http://{box_name}.htb"),
-                ("fuzz2", f"feroxbuster -u http://{box_name}.htb")
+                f"sleep 2 && vhost {box_name}.htb",
+                f"fuzz_dir http://{box_name}.htb",
+                f"feroxbuster -u http://{box_name}.htb",
+                f"dig {box_name}.htb"
             ]),
             ("SERVICES", [
-                ("smbclient", "mkdir share; impacket-smbserver share ./share -smb2support"),
-                ("ligolo-proxy", "ip link del ligolo 2>/dev/null; ip tuntap add dev ligolo mode tun user $(whoami); ip link set ligolo up && ligolo-proxy -selfcert ;echo 'N'"),
-                ("smb_Guest", f"sleep 2; ntpdate {box_ip} && nxc smb {box_ip} -u 'a' -p '' --shares --users --pass-pol --rid-brute 10000 --log $(pwd)/smb.out; cat smb.out | grep TypeUser | cut -d '\' -f 2 | cut -d ' ' -f 1 > users.txt; cat users.txt")
+                f"sleep 2; ntpdate {box_ip} && nxc smb {box_ip} -u 'a' -p '' --shares --users --pass-pol --rid-brute 10000 --log $(pwd)/smb.out; cat smb.out | grep TypeUser | cut -d '\\' -f 2 | cut -d ' ' -f 1 > users.txt; cat users.txt",
+                "ip link del ligolo 2>/dev/null; ip tuntap add dev ligolo mode tun user $(whoami); ip link set ligolo up && ligolo-proxy -selfcert ;echo 'N'",
+                "mkdir share; impacket-smbserver share ./share -smb2support",
+                f"dig {box_name}.htb"
             ])
         ]
     elif os_type == "l":
-        grouped_commands = [
+        groups = [
             ("SCANNING", [
-                ("rustscan-tcp", f"rustscan -a {box_ip} -- -sC -sV -o rustscan"),
-                ("ports-tcp", f"nmap_default {box_ip} -p-"),
-                ("ports-udp", f"nmap_udp {box_ip}")
-            ]),
-            ("FUZZING", [
-                ("vhost", f"sleep 2 && vhost {box_name}.htb"),
-                ("fuzz1", f"fuzz_dir http://{box_name}.htb"),
-                ("fuzz2", f"feroxbuster -u http://{box_name}.htb")
-            ]),
-            ("SERVICES", [
-                ("gobuster", f"gobuster dir -w /opt/SecLists/Discovery/Web-Content/raft-small-words.txt -a 'pain' -o gobuster.txt -u http://{box_name}/"),
-                ("placeholder", "updog -p 80"),
-                ("placeholder2", f"sleep 1 ; dig axfr @{box_ip} {box_name}.htb")
+                f"rustscan -a {box_ip} -- -sC -sV -o rustscan",
+                f"sleep 2 && nmap_default {box_ip} -p-",
+                f"nmap_udp {box_ip}",
+                f"dig {box_name}.htb"
             ])
         ]
     else:
-        print("[-] Invalid OS type.")
+        print("[-] Invalid OS type")
         sys.exit(1)
 
-    for tab_title, tab_cmds in grouped_commands:
-        generate_terminator_tab(tab_cmds, tab_title)
+    for title, cmds in groups:
+        create_2x2_and_fill(session_name, title, cmds)
+        time.sleep(WINDOW_DELAY)
 
+    try:
+        tmux(['kill-window', '-t', f"{session_name}:init"])
+    except subprocess.CalledProcessError:
+        pass
 
-# === Main Execution ===
+    print(f"[+] Attaching to tmux session '{session_name}' (prefix Ctrl+A)")
+    tmux(['attach-session', '-t', session_name])
+
 
 if __name__ == "__main__":
     tun0_ip = check_tun0_interface()
@@ -130,19 +144,10 @@ if __name__ == "__main__":
 
     box_name = input("[?] Enter box name: ").strip()
     create_directory(box_name)
-    os.chdir(f"/htb/{box_name}/www/")
-    run_zsh_command(f"gen_lin_rev {tun0_ip} 8443")
-    run_zsh_command(f"gen_php_rev {tun0_ip} 8443")
+    os.chdir(f"/htb/{box_name}/www")
 
-    os.chdir(f"/htb/{box_name}/")
     box_ip = input("[?] Enter box IP: ").strip()
     ping_host(box_ip)
-    run_zsh_command(f"addhost {box_ip} {box_name}.htb")
 
     os_type = input("[?] Target OS - Linux (l) or Windows (w): ").strip().lower()
-    if os_type not in ['l', 'w']:
-        print("[-] Invalid OS type. Use 'l' or 'w'.")
-        sys.exit(1)
-
-    os.system(FULLSCREEN_I3_PANE)
-    start_terminator_split_layout(box_ip, box_name, os_type)
+    start_tmux_layout(box_name, box_ip, os_type)
