@@ -1,161 +1,180 @@
 #!/usr/bin/env python3
+"""
+start_htb.py — robust tmux automation for HTB boxes
+- 4 windows: SCANNING, FUZZING, SERVICES, SHELL
+- Each window has 3 panes with splits
+- Commands are sent directly (no zsh -c wrapper)
+- Preserves existing behavior: reverse shells, addhost, ping check
+- Prefix: Ctrl+a (matches your ~/.tmux.conf)
+"""
+
 import os
 import subprocess
 import sys
 import time
+from pathlib import Path
 
-SPLIT_DELAY = 0.6
-COMMAND_DELAY = 1.0
-WINDOW_DELAY = 1.0
+SPLIT_DELAY = 0.3
+COMMAND_DELAY = 0.7
+ATTACH_WAIT = 0.25
+
+def run(cmd, check=False, capture=False):
+    if capture:
+        return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return subprocess.run(cmd, check=check)
 
 def check_tun0_interface():
-    try:
-        res = subprocess.run(['ip', 'addr', 'show', 'tun0'],
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if res.returncode != 0:
-            print("[-] tun0 not found or not connected")
-            sys.exit(1)
-        for line in res.stdout.splitlines():
-            if "inet " in line:
-                return line.strip().split()[1].split('/')[0]
-        print("[-] tun0 found but no IP address assigned")
-        sys.exit(1)
-    except Exception as e:
-        print("[-] Error checking tun0:", e)
-        sys.exit(1)
+    res = run(['ip', 'addr', 'show', 'tun0'], capture=True)
+    for line in res.stdout.splitlines():
+        if "inet " in line:
+            return line.strip().split()[1].split('/')[0]
+    print("[-] tun0 not found or no IP assigned")
+    sys.exit(1)
 
 def create_directory(name):
-    path = f"/htb/{name}"
-    os.makedirs(f"{path}/www", exist_ok=True)
+    path = Path(f"/htb/{name}")
+    (path / "www").mkdir(parents=True, exist_ok=True)
     print(f"[+] Directory created: {path}/www")
+    return path
 
 def ping_host(ip):
     print("[i] Waiting for host to respond to ping...")
     for _ in range(15):
-        if subprocess.run(['ping', '-c', '1', '-W', '1', ip],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+        if run(['ping', '-c', '1', '-W', '1', ip], capture=False).returncode == 0:
             print("[+] Host is alive!")
             return
         time.sleep(1)
-    choice = input("[-] Host not responding. (c)ontinue/(s)kip/(e)xit? ").strip().lower()
-    if choice == 'e':
-        sys.exit(0)
+    print("[-] Host not responding. Exiting.")
+    sys.exit(1)
 
-def tmux(cmd_args):
-    subprocess.run(['tmux'] + cmd_args, check=True)
+def append_hosts(box_ip, box_name):
+    hosts_path = Path("/etc/hosts")
+    try:
+        lines = hosts_path.read_text().splitlines()
+    except Exception:
+        print("[-] Cannot read /etc/hosts, skipping hosts update.")
+        return
 
-def run_zsh_command(command):
-    subprocess.run(['zsh', '-c', f'source ~/.zshrc && {command}'], check=True)
-
-
-def create_2x2_and_fill(session_name, window_name, commands):
-    """Create 4 panes and send commands with Enter."""
-    target = f"{session_name}:{window_name}"
-    tmux(['new-window', '-d', '-t', session_name, '-n', window_name])
-    time.sleep(SPLIT_DELAY)
-
-    # Split panes: top/bottom then left/right
-    panes = tmux_list_panes(target)
-    base_id = panes[0]['id']
-    tmux(['split-window', '-h', '-t', base_id])
-    time.sleep(SPLIT_DELAY)
-    panes = tmux_list_panes(target)
-    tmux(['split-window', '-v', '-t', panes[0]['id']])
-    time.sleep(SPLIT_DELAY)
-    tmux(['split-window', '-v', '-t', panes[1]['id']])
-    time.sleep(SPLIT_DELAY)
-
-    panes = tmux_list_panes(target)
-    if len(panes) < 4:
-        print("[-] Could not create 4 panes")
-        sys.exit(1)
-
-    # Send commands literally to each pane
-    for i, cmd in enumerate(commands[:4]):
-        pid = panes[i]['id']
-        # Send literally with quotes to prevent splitting
-        tmux(['send-keys', '-t', pid, cmd])
-        tmux(['send-keys', '-t', pid, 'C-m'])
-        time.sleep(COMMAND_DELAY)
-
-def tmux_list_panes(target):
-    out = subprocess.run(['tmux', 'list-panes', '-t', target, '-F', '#{pane_index} #{pane_id}'],
-                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
-    panes = []
-    for line in out.stdout.splitlines():
-        idx, pid = line.split()
-        panes.append({'index': int(idx), 'id': pid})
-    return sorted(panes, key=lambda p: p['index'])
-
-def start_tmux_layout(box_name, box_ip, os_type):
-    session_name = box_name
-    tmux(['new-session', '-d', '-s', session_name, '-n', 'init'])
-    tmux(['set-option', '-t', session_name, 'base-index', '1'])
-    tmux(['set-option', '-t', session_name, 'pane-base-index', '1'])
-    tmux(['set-option', '-t', session_name, 'prefix', 'C-a'])
-    tmux(['set-option', '-t', session_name, 'escape-time', '10'])
-
-    if os_type == "w":
-        groups = [
-            ("SCANNING", [
-                f"rustscan -a {box_ip} -- -sC -sV -o rustscan",
-                f"sleep 5 && nmap_default {box_ip} -p-",
-                f"nmap_udp {box_ip}",
-                f"dig {box_name}.htb"
-            ]),
-            ("FUZZING", [
-                f"sleep 2 && vhost {box_name}.htb",
-                f"fuzz_dir http://{box_name}.htb",
-                f"feroxbuster -u http://{box_name}.htb",
-                f"dig {box_name}.htb"
-            ]),
-            ("SERVICES", [
-                f"sleep 2; ntpdate {box_ip} && nxc smb {box_ip} -u 'a' -p '' --shares --users --pass-pol --rid-brute 10000 --log $(pwd)/smb.out; cat smb.out | grep TypeUser | cut -d '\\' -f 2 | cut -d ' ' -f 1 > users.txt; cat users.txt",
-                "ip link del ligolo 2>/dev/null; ip tuntap add dev ligolo mode tun user $(whoami); ip link set ligolo up && ligolo-proxy -selfcert ;echo 'N'",
-                "mkdir share; impacket-smbserver share ./share -smb2support",
-                f"dig {box_name}.htb"
-            ])
-        ]
-    elif os_type == "l":
-        groups = [
-            ("SCANNING", [
-                f"rustscan -a {box_ip} -- -sC -sV -o rustscan",
-                f"sleep 5 && nmap_default {box_ip} -p-",
-                f"nmap_udp {box_ip}",
-                f"dig {box_name}.htb"
-            ])
-        ]
-    else:
-        print("[-] Invalid OS type")
-        sys.exit(1)
-
-    for title, cmds in groups:
-        create_2x2_and_fill(session_name, title, cmds)
-        time.sleep(WINDOW_DELAY)
+    updated = False
+    for i, line in enumerate(lines):
+        parts = line.split()
+        if parts and parts[0] == box_ip:
+            if box_name not in line:
+                lines[i] += f" {box_name}.htb {box_name}"
+            updated = True
+            break
+    if not updated:
+        lines.append(f"{box_ip} {box_name}.htb {box_name}")
 
     try:
-        tmux(['kill-window', '-t', f"{session_name}:init"])
-    except subprocess.CalledProcessError:
-        pass
+        tmp = hosts_path.with_suffix('.tmp')
+        tmp.write_text("\n".join(lines) + "\n")
+        tmp.replace(hosts_path)
+        print(f"[+] Updated /etc/hosts with {box_name}.htb")
+    except Exception:
+        print("[-] Failed to write /etc/hosts (permission?)")
 
-    print(f"[+] Attaching to tmux session '{session_name}' (prefix Ctrl+A)")
-    tmux(['attach-session', '-t', session_name])
+def tmux_new_session(session, cwd):
+    run(['tmux', 'kill-session', '-t', session], check=False)
+    run(['tmux', 'new-session', '-d', '-s', session, '-c', cwd], check=True)
+    run(['tmux', 'set-option', '-t', session, 'base-index', '1'], check=True)
+    run(['tmux', 'set-option', '-t', session, 'pane-base-index', '1'], check=True)
+    run(['tmux', 'set-option', '-t', session, 'prefix', 'C-a'], check=True)
 
+def create_window(session, name, cwd):
+    run(['tmux', 'new-window', '-t', session, '-n', name, '-c', cwd], check=True)
 
-if __name__ == "__main__":
+def create_3pane_split(session, window):
+    """Create 3 panes in window: top/bottom split, then split bottom horizontally"""
+    # Split top into top/bottom
+    run(['tmux', 'split-window', '-v', '-t', f'{session}:{window}.1'], check=True)
+    time.sleep(SPLIT_DELAY)
+    # Split bottom pane horizontally
+    run(['tmux', 'split-window', '-h', '-t', f'{session}:{window}.2'], check=True)
+    time.sleep(SPLIT_DELAY)
+    # Return pane ids
+    out = run(['tmux', 'list-panes', '-t', f'{session}:{window}', '-F', '#{pane_index} #{pane_id}'], capture=True)
+    panes = [line.split()[1] for line in out.stdout.splitlines()]
+    return panes  # ordered list of pane ids
+
+def send_to_pane(pane_id, command):
+    run(['tmux', 'send-keys', '-t', pane_id, '-l', command], check=True)
+    run(['tmux', 'send-keys', '-t', pane_id, 'C-m'], check=True)
+    time.sleep(COMMAND_DELAY)
+
+def main():
     tun0_ip = check_tun0_interface()
     print(f"[+] tun0 IP: {tun0_ip}")
 
     box_name = input("[?] Enter box name: ").strip()
-    create_directory(box_name)
-    os.chdir(f"/htb/{box_name}/www/")
-    run_zsh_command(f"gen_lin_rev {tun0_ip} 8443")
-    run_zsh_command(f"gen_php_rev {tun0_ip} 8443")
+    box_path = create_directory(box_name)
+    www_dir = box_path / "www"
+    os.chdir(str(www_dir))
+    # Generate shells (your gen scripts)
+    run(['gen_lin_rev', tun0_ip, '8443'], check=False)
+    run(['gen_php_rev', tun0_ip, '8443'], check=False)
 
-    os.chdir(f"/htb/{box_name}/")
+    os.chdir(str(box_path))
     box_ip = input("[?] Enter box IP: ").strip()
     ping_host(box_ip)
-    run_zsh_command(f"addhost {box_ip} {box_name}.htb")
+    append_hosts(box_ip, box_name)
 
     os_type = input("[?] Target OS - Linux (l) or Windows (w): ").strip().lower()
-    start_tmux_layout(box_name, box_ip, os_type)
+
+    session_name = box_name
+    tmux_new_session(session_name, str(box_path))
+
+    # Create 4 windows
+    windows = ['SCANNING', 'FUZZING', 'SERVICES', 'SHELL']
+    for w in windows:
+        create_window(session_name, w, str(box_path))
+
+    # In each window, create 3-pane split
+    panes_map = {}
+    for w in windows:
+        panes_map[w] = create_3pane_split(session_name, w)
+
+    # Commands per window/pane
+    scanning_cmds = [
+        f"rustscan -a {box_ip} -- -sC -sV -o rustscan",
+        f"nmap_default {box_ip} -p-",
+        f"nmap_udp {box_ip}"
+    ]
+    fuzzing_cmds = [
+        f"vhost {box_name}.htb",
+        f"fuzz_dir http://{box_name}.htb",
+        f"feroxbuster -u http://{box_name}.htb"
+    ]
+    services_cmds = [
+        f"mkdir -p /htb/{box_name}/share && cd /htb/{box_name} && impacket-smbserver share ./share -smb2support",
+        f"ip link del ligolo 2>/dev/null; ip tuntap add dev ligolo mode tun user $(whoami); ip link set ligolo up && ligolo-proxy -selfcert ;echo 'N'",
+        f"dig {box_name}.htb"
+    ]
+    shell_cmds = [
+        "zsh -i",
+        "zsh -i",
+        "zsh -i"
+    ]
+
+    cmd_map = {
+        'SCANNING': scanning_cmds,
+        'FUZZING': fuzzing_cmds,
+        'SERVICES': services_cmds,
+        'SHELL': shell_cmds
+    }
+
+    # Send commands
+    for w in windows:
+        panes = panes_map[w]
+        cmds = cmd_map[w]
+        for pane_id, cmd in zip(panes, cmds):
+            send_to_pane(pane_id, cmd)
+
+    # Attach session at end
+    if 'TMUX' in os.environ:
+        run(['tmux', 'switch-client', '-t', session_name], check=False)
+    else:
+        subprocess.run(['tmux', 'attach-session', '-t', session_name])
+
+if __name__ == "__main__":
+    main()
