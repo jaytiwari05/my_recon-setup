@@ -114,8 +114,9 @@ vhost() {
     fi
 
     local wordlist="$seclists_dir/Discovery/DNS/bitquark-subdomains-top100000.txt"
-    ffuf -H "Host: FUZZ.$1" -u $url -w "$wordlist" "${@:2}"
-}
+    #ffuf -H "Host: FUZZ.$1" -u $url -w "$wordlist" "${@:2}"
+    ffuf -u $url -H "Host: FUZZ.$1" -w "$wordlist" -ac -fc 404
+  }
 
 fuzz_dir() {
     if [ "$#" -lt 1 ]; then
