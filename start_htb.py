@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
+
 """
-scanp_automation.py ??? robust tmux automation for HTB boxes
-- 4 windows: SCANNING, FUZZING, SERVICES, SHELL
-- Each window has 3 panes with splits (Top, Bottom-Left, Bottom-Right)
-- Commands are sent directly without echo wrappers
-- Creates /htb/{name} directory structure
-- Updates /etc/hosts with strict formatting
-- Checks tun0 IP and Pings target
-- Auto-attaches to session
+Author : PaiN
 """
 
 import os
